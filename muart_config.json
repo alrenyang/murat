@@ -1,0 +1,12 @@
+{
+  "port_name": "/dev/cu.BTHIFIAUDIO",
+  "baud_rate": 115200,
+  "show_timestamp": false,
+  "auto_scroll": true,
+  "is_hex_mode": false,
+  "theme": 0,
+  "font_family": "JetBrains Mono",
+  "font_size": 8,
+  "log_dir_path": ".",
+  "highlight_rules": []
+}
