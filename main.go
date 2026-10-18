@@ -19,7 +19,6 @@ import (
 
 const configFile = "muart_config.json"
 
-// 설정 구조체
 type Config struct {
 	PortName       string          `json:"port_name"`
 	BaudRate       int             `json:"baud_rate"`
@@ -33,7 +32,6 @@ type Config struct {
 	HighlightRules []HighlightRule `json:"highlight_rules"`
 }
 
-// 설정 파일 불러오기
 func loadConfig() Config {
 	defaultCfg := Config{
 		PortName:       "/dev/tty.usbserial-0001",
@@ -60,7 +58,6 @@ func loadConfig() Config {
 	return cfg
 }
 
-// 설정 파일 저장하기
 func (m *model) saveConfig() {
 	cfg := Config{
 		PortName:       m.portName,
@@ -202,7 +199,7 @@ func highlightLog(line string, rules []HighlightRule) string {
 			return st.Render(line)
 		}
 	}
-	if strings.Contains(line, "[TX]") || strings.Contains(line, "[HEX]") {
+	if strings.Contains(line, "[HEX]") {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Italic(true).Render(line)
 	}
 	return line
@@ -283,6 +280,23 @@ func (m *model) writeLog(rawText string) {
 	m.updateViewportContent()
 }
 
+func (m *model) writeTxLog(rawText string) {
+	displayLine, fileLine := m.formatLogData(rawText)
+	finalDisplay := lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render(displayLine)
+
+	if m.fullLogBuffer == "" {
+		m.fullLogBuffer = finalDisplay
+	} else {
+		m.fullLogBuffer += "\n" + finalDisplay
+	}
+
+	if m.isLogging && m.logFile != nil {
+		m.logFile.WriteString(fileLine + "\n")
+	}
+
+	m.updateViewportContent()
+}
+
 func readSerial(p serial.Port) tea.Cmd {
 	return func() tea.Msg {
 		buf := make([]byte, 128)
@@ -313,6 +327,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q":
 				m.selectingStep = 0
+				m.textInput.Reset() // 입력창 초기화
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -330,6 +345,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectingStep = 2
 				} else {
 					m.selectingStep = 0
+					m.textInput.Reset()
 					if m.inInputMode {
 						m.textInput.Focus()
 					}
@@ -342,6 +358,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q":
 				m.selectingStep = 0
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -379,6 +396,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.saveConfig()
 
 				m.selectingStep = 0
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -393,6 +411,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q":
 				m.selectingStep = 0
+				m.textInput.Reset() // 설정창 닫을 때 입력창 값 클리어
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -485,6 +504,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch msg.String() {
 				case "esc":
 					m.hlInputMode = false
+					m.textInput.Reset()
 					m.textInput.Blur()
 				case "enter":
 					val := strings.TrimSpace(m.textInput.Value())
@@ -507,6 +527,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.saveConfig()
 						}
 						m.hlInputMode = false
+						m.textInput.Reset()
 						m.textInput.Blur()
 					}
 				default:
@@ -520,6 +541,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q":
 				m.selectingStep = 0
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -559,7 +581,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc":
 				m.selectingStep = 3
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -591,7 +613,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.selectingStep = 3
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -607,7 +629,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc":
 				m.selectingStep = 0
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -615,7 +637,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchQuery = strings.TrimSpace(m.textInput.Value())
 				m.updateViewportContent()
 				m.selectingStep = 0
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -631,7 +653,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc":
 				m.selectingStep = 0
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -657,7 +679,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				m.selectingStep = 0
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -673,7 +695,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc":
 				m.selectingStep = 3
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -696,7 +718,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.writeLog(fmt.Sprintf("[설정] 폰트 변경 완료: 패밀리 [%s], 크기 [%dpt]", m.fontFamily, m.fontSize))
 				}
 				m.selectingStep = 3
-				m.textInput.Blur()
+				m.textInput.Reset()
 				if m.inInputMode {
 					m.textInput.Focus()
 				}
@@ -747,7 +769,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err != nil {
 							m.writeLog(fmt.Sprintf("[송신 FAIL] %v", err))
 						} else {
-							m.writeLog(fmt.Sprintf("[TX] %s", typedText))
+							m.writeTxLog(typedText)
 						}
 					} else {
 						m.writeLog("[에러] 연결된 시리얼 포트가 없습니다. 'Esc'를 눌러 모드 전환 후 'p'를 눌러 포트를 선택하세요.")
@@ -897,40 +919,40 @@ func (m model) View() string {
 	ts := getThemeStyles(m.theme)
 
 	if m.selectingStep == 1 {
-		modalContent := "🔌 [1/2] 시리얼 포트 선택\n\n"
+		modalContent := "포트 선택 (Serial Port)\n\n"
 		if len(m.availablePorts) == 0 {
-			modalContent += "  검색된 포트가 없습니다.\n"
+			modalContent += "검색된 포트가 없습니다.\n"
 		} else {
 			for i, pName := range m.availablePorts {
 				cursor := "  "
 				if i == m.portCursor {
-					cursor = "▶ "
+					cursor = "> "
 					pName = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(pName)
 				}
 				modalContent += fmt.Sprintf("%s%s\n", cursor, pName)
 			}
 		}
-		modalContent += "\n[↑/↓] 이동  [Enter] 다음  [Esc] 취소"
+		modalContent += "\n[상/하] 이동  [Enter] 다음  [Esc] 취소"
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(modalContent))
 	}
 
 	if m.selectingStep == 2 {
-		modalContent := "⚡ [2/2] Baud Rate 선택\n\n"
+		modalContent := "통신 속도 선택 (Baud Rate)\n\n"
 		for i, bRate := range m.baudRates {
 			cursor := "  "
 			rateStr := fmt.Sprintf("%d", bRate)
 			if i == m.baudCursor {
-				cursor = "▶ "
+				cursor = "> "
 				rateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(rateStr)
 			}
 			modalContent += fmt.Sprintf("%s%s\n", cursor, rateStr)
 		}
-		modalContent += "\n[↑/↓] 이동  [Enter] 연결 완료  [Esc] 취소"
+		modalContent += "\n[상/하] 이동  [Enter] 연결 완료  [Esc] 취소"
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(modalContent))
 	}
 
 	if m.selectingStep == 3 {
-		s := "⚙️ 설정 메뉴 (Settings)\n\n"
+		s := "설정 메뉴 (Settings)\n\n"
 
 		tsStatus := "[OFF]"
 		if m.showTimestamp {
@@ -939,7 +961,7 @@ func (m model) View() string {
 		item1 := fmt.Sprintf("타임스탬프 사용 %s", tsStatus)
 		if m.settingCursor == 0 {
 			item1 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item1)
-			s += fmt.Sprintf("▶ %s\n", item1)
+			s += fmt.Sprintf("> %s\n", item1)
 		} else {
 			s += fmt.Sprintf("  %s\n", item1)
 		}
@@ -951,7 +973,7 @@ func (m model) View() string {
 		item2 := fmt.Sprintf("오토스크롤 사용 %s", asStatus)
 		if m.settingCursor == 1 {
 			item2 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item2)
-			s += fmt.Sprintf("▶ %s\n", item2)
+			s += fmt.Sprintf("> %s\n", item2)
 		} else {
 			s += fmt.Sprintf("  %s\n", item2)
 		}
@@ -963,7 +985,7 @@ func (m model) View() string {
 		item3 := fmt.Sprintf("파일 로깅 사용 %s", lgStatus)
 		if m.settingCursor == 2 {
 			item3 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item3)
-			s += fmt.Sprintf("▶ %s\n", item3)
+			s += fmt.Sprintf("> %s\n", item3)
 		} else {
 			s += fmt.Sprintf("  %s\n", item3)
 		}
@@ -975,7 +997,7 @@ func (m model) View() string {
 		item4 := fmt.Sprintf("Hex 뷰어 모드 %s", hxStatus)
 		if m.settingCursor == 3 {
 			item4 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item4)
-			s += fmt.Sprintf("▶ %s\n", item4)
+			s += fmt.Sprintf("> %s\n", item4)
 		} else {
 			s += fmt.Sprintf("  %s\n", item4)
 		}
@@ -989,7 +1011,7 @@ func (m model) View() string {
 		item5 := fmt.Sprintf("테마 변경: [%s]", themeName)
 		if m.settingCursor == 4 {
 			item5 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item5)
-			s += fmt.Sprintf("▶ %s\n", item5)
+			s += fmt.Sprintf("> %s\n", item5)
 		} else {
 			s += fmt.Sprintf("  %s\n", item5)
 		}
@@ -997,7 +1019,7 @@ func (m model) View() string {
 		item6 := fmt.Sprintf("폰트 설정: [%s, %dpt]", m.fontFamily, m.fontSize)
 		if m.settingCursor == 5 {
 			item6 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item6)
-			s += fmt.Sprintf("▶ %s\n", item6)
+			s += fmt.Sprintf("> %s\n", item6)
 		} else {
 			s += fmt.Sprintf("  %s\n", item6)
 		}
@@ -1005,17 +1027,17 @@ func (m model) View() string {
 		item7 := fmt.Sprintf("로그 저장 폴더: %s", m.logDirPath)
 		if m.settingCursor == 6 {
 			item7 = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(item7)
-			s += fmt.Sprintf("▶ %s\n", item7)
+			s += fmt.Sprintf("> %s\n", item7)
 		} else {
 			s += fmt.Sprintf("  %s\n", item7)
 		}
 
-		s += "\n[↑/↓] 이동  [Enter] 토글/설정  [Esc] 닫기"
+		s += "\n[상/하] 이동  [Enter] 토글/설정  [Esc] 닫기"
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(s))
 	}
 
 	if m.selectingStep == 4 {
-		s := "🎨 하이라이트 키워드 설정 (최대 10개)\n\n"
+		s := "하이라이트 키워드 설정 (최대 10개)\n\n"
 		if m.hlInputMode {
 			if m.hlInputStep == 0 {
 				s += fmt.Sprintf("새 키워드 입력:\n%s\n\n[Enter] 다음  [Esc] 취소", m.textInput.View())
@@ -1030,7 +1052,7 @@ func (m model) View() string {
 					cursor := "  "
 					lineStr := fmt.Sprintf("[%d] %s (%s)", i+1, rule.Keyword, rule.Color)
 					if i == m.hlCursor {
-						cursor = "▶ "
+						cursor = "> "
 						lineStr = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(lineStr)
 					}
 					s += fmt.Sprintf("%s%s (선택 시 삭제)\n", cursor, lineStr)
@@ -1041,43 +1063,43 @@ func (m model) View() string {
 				addCursor := "  "
 				addStr := "+ 새 키워드 추가하기"
 				if m.hlCursor == len(m.highlightRules) {
-					addCursor = "▶ "
+					addCursor = "> "
 					addStr = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Bold(true).Render(addStr)
 				}
 				s += fmt.Sprintf("\n%s%s\n", addCursor, addStr)
 			} else {
 				s += "\n(최대 10개까지 등록되었습니다)\n"
 			}
-			s += "\n[↑/↓] 이동  [Enter] 추가/삭제  [Esc] 닫기"
+			s += "\n[상/하] 이동  [Enter] 추가/삭제  [Esc] 닫기"
 		}
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(s))
 	}
 
 	if m.selectingStep == 5 {
-		s := "📁 로그 저장 폴더 경로 입력\n\n"
+		s := "로그 저장 폴더 경로 입력\n\n"
 		s += fmt.Sprintf("저장할 폴더 경로를 입력하세요:\n%s\n\n[Enter] 저장  [Esc] 취소", m.textInput.View())
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(s))
 	}
 
 	if m.selectingStep == 6 {
-		s := "🔍 로그 키워드 검색\n\n"
+		s := "로그 키워드 검색\n\n"
 		s += fmt.Sprintf("검색할 단어 입력 (비우고 엔터 시 필터 해제):\n%s\n\n[Enter] 검색/해제  [Esc] 취소", m.textInput.View())
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(s))
 	}
 
 	if m.selectingStep == 7 {
-		s := "💾 전체 로그 내보내기 (Export)\n\n"
+		s := "전체 로그 내보내기 (Export)\n\n"
 		s += fmt.Sprintf("저장할 파일명을 입력하세요:\n%s\n\n[Enter] 내보내기  [Esc] 취소", m.textInput.View())
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(s))
 	}
 
 	if m.selectingStep == 8 {
-		s := "🔤 폰트 설정 (Font Family & Size)\n\n"
+		s := "폰트 설정 (Font Family & Size)\n\n"
 		s += fmt.Sprintf("폰트 이름과 크기를 입력하세요 (예: JetBrains Mono, 14):\n%s\n\n[Enter] 설정 완료  [Esc] 취소", m.textInput.View())
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Render(s))
 	}
 
-	title := ts.Title.Render("🔌 muart Terminal")
+	title := ts.Title.Render("muart Terminal")
 
 	statusStr := "CONNECTED"
 	if m.port == nil {
@@ -1111,7 +1133,7 @@ func (m model) View() string {
 
 	searchInfo := ""
 	if m.searchQuery != "" {
-		searchInfo = fmt.Sprintf(" | 🔍 검색: \"%s\"", m.searchQuery)
+		searchInfo = fmt.Sprintf(" | 검색: \"%s\"", m.searchQuery)
 	}
 
 	modeStr := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true).Render("INPUT")
@@ -1119,8 +1141,8 @@ func (m model) View() string {
 		modeStr = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true).Render("MODE (Command)")
 	}
 
-	statInfo := fmt.Sprintf(" | 📥 RX: %dB (%d pkts) | 📤 TX: %dB (%d pkts)", m.rxBytes, m.rxPkts, m.txBytes, m.txPkts)
-	fontInfo := fmt.Sprintf(" | 🔤 폰트: %s (%dpt)", m.fontFamily, m.fontSize)
+	statInfo := fmt.Sprintf(" | RX: %dB (%d pkts) | TX: %dB (%d pkts)", m.rxBytes, m.rxPkts, m.txBytes, m.txPkts)
+	fontInfo := fmt.Sprintf(" | 폰트: %s (%dpt)", m.fontFamily, m.fontSize)
 	footerText := fmt.Sprintf(" 상태: %s | 포트: %s | Baud: %d | TS %s | AS %s | LOG %s | HEX %s%s%s%s | [%s] ", statusStyled, m.portName, m.baudRate, tsCheck, asCheck, lgCheck, hxCheck, searchInfo, statInfo, fontInfo, modeStr)
 
 	appWidth := m.width

@@ -4,9 +4,9 @@
   "show_timestamp": false,
   "auto_scroll": true,
   "is_hex_mode": false,
-  "theme": 0,
+  "theme": 2,
   "font_family": "JetBrains Mono",
-  "font_size": 8,
+  "font_size": 10,
   "log_dir_path": ".",
   "highlight_rules": []
 }
