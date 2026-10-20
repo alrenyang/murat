@@ -1,10 +1,11 @@
 {
-  "port_name": "/dev/cu.BTHIFIAUDIO",
+  "port_name": "/dev/tty.usbmodem11202",
   "baud_rate": 115200,
+  "line_ending": "LF",
   "show_timestamp": false,
   "auto_scroll": true,
   "is_hex_mode": false,
-  "theme": 2,
+  "theme": 1,
   "font_family": "JetBrains Mono",
   "font_size": 10,
   "log_dir_path": ".",
