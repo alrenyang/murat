@@ -2,12 +2,12 @@
   "port_name": "/dev/tty.usbmodem11202",
   "baud_rate": 115200,
   "line_ending": "없음",
-  "show_timestamp": true,
-  "auto_scroll": true,
+  "show_timestamp": false,
+  "auto_scroll": false,
   "is_hex_mode": false,
   "theme": 1,
   "font_family": "JetBrains Mono",
   "font_size": 9,
-  "log_dir_path": ".",
+  "log_dir_path": "",
   "highlight_rules": []
 }
