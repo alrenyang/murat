@@ -20,8 +20,7 @@ import (
 
 const configFile = "muart_config.json"
 
-// The terminal view is intentionally bounded. Enable file logging for complete
-// long-running captures; the UI only keeps recent lines to avoid unbounded RAM.
+// UI 메모리 방어를 위한 화면 표시 버퍼 제한
 const (
 	maxDisplayLogLines   = 5000
 	maxDisplayLogBytes   = 2 * 1024 * 1024
@@ -62,8 +61,6 @@ func loadConfig() Config {
 		return defaultCfg
 	}
 
-	// Unmarshal over defaults so fields absent from older config files retain
-	// sensible defaults while explicitly configured false values remain false.
 	cfg := defaultCfg
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return defaultCfg
@@ -121,7 +118,7 @@ func (m *model) saveConfig() error {
 
 func (m *model) persistConfig() {
 	if err := m.saveConfig(); err != nil {
-		m.writeLog(fmt.Sprintf("[에러] 설정 파일 저장 실패 (%s): %v", configFile, err))
+		m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 설정 파일 저장 실패 (%s): %v", configFile, err)))
 	}
 }
 
@@ -184,7 +181,7 @@ type model struct {
 	baudRate       int
 	lineEnding     string
 	viewport       viewport.Model
-	memoArea       textarea.Model // 💡 우측 메모장을 여러 줄 수정 가능한 textarea로 변경
+	memoArea       textarea.Model
 	textInput      textinput.Model
 	activePane     int
 
@@ -288,7 +285,7 @@ func (m *model) formatLogData(raw string) (string, string) {
 
 	displayLine = fileLine
 
-	if m.isHexMode && !strings.HasPrefix(raw, "[설정]") && !strings.HasPrefix(raw, "[에러]") && !strings.HasPrefix(raw, "[로그") && !strings.HasPrefix(raw, "[RX ") {
+	if m.isHexMode && !strings.HasPrefix(raw, "[설정]") && !strings.HasPrefix(raw, "[에러]") && !strings.HasPrefix(raw, "[연결 끊김]") && !strings.HasPrefix(raw, "[로그") && !strings.HasPrefix(raw, "[RX ") {
 		hexStr := hex.EncodeToString([]byte(raw))
 		formattedHex := ""
 		for i := 0; i < len(hexStr); i += 2 {
@@ -314,10 +311,10 @@ func (m *model) appendDisplayLine(line string) {
 			break
 		}
 		m.displayLogBytes -= len(m.displayLogLines[m.displayLogHead]) + 1
-		m.displayLogLines[m.displayLogHead] = "" // release reference to discarded line
+		m.displayLogLines[m.displayLogHead] = ""
 		m.displayLogHead++
 	}
-	// Compact occasionally rather than shifting thousands of lines on every RX.
+	// 메모리 해제를 위한 주기적 압축
 	if m.displayLogHead > 1024 && m.displayLogHead*2 >= len(m.displayLogLines) {
 		remaining := copy(m.displayLogLines, m.displayLogLines[m.displayLogHead:])
 		for i := remaining; i < len(m.displayLogLines); i++ {
@@ -357,12 +354,13 @@ func (m *model) writeFileLog(line string) {
 		return
 	}
 	if _, err := m.logFile.WriteString(line + "\n"); err != nil {
-		// Do not recurse through writeLog: the failure itself is appended directly.
 		_ = m.logFile.Close()
 		m.logFile = nil
 		m.isLogging = false
 		stamp := time.Now().Format("15:04:05.000")
-		m.appendDisplayLine(fmt.Sprintf("[%s] [에러] 로그 파일 쓰기 실패. 로깅을 중지했습니다: %v", stamp, err))
+		// 파일 로깅 실패 시 강렬한 에러 표시
+		errMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(fmt.Sprintf("[%s] [에러] 파일 쓰기 실패로 로깅을 중지합니다: %v", stamp, err))
+		m.appendDisplayLine(errMsg)
 	}
 }
 
@@ -389,8 +387,6 @@ func (m *model) writeLogBatch(lines []string) {
 func (m *model) writeTxLog(rawText string) {
 	displayLine, fileLine := m.formatLogData(rawText)
 	m.appendDisplayLine(lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render(displayLine))
-	m.txBytes += int64(len(rawText))
-	m.txPkts++
 	m.writeFileLog(fileLine)
 	m.updateViewportContent()
 }
@@ -431,6 +427,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	// 마우스 휠 스크롤 지원 (터미널 뷰포트 탐색 편의성 극대화)
+	case tea.MouseMsg:
+		if m.selectingStep == 0 {
+			switch msg.Type {
+			case tea.MouseWheelUp:
+				m.viewport.LineUp(3)
+				m.autoScroll = false // 수동 스크롤 시 오토스크롤 임시 정지
+				return m, nil
+			case tea.MouseWheelDown:
+				m.viewport.LineDown(3)
+				if m.viewport.AtBottom() {
+					m.autoScroll = true // 끝까지 내리면 오토스크롤 복귀
+				}
+				return m, nil
+			}
+		}
+
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			if m.port != nil {
@@ -442,7 +455,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Help is a modal screen; close it with ?, Esc, or q.
 		if m.showHelp {
 			switch msg.String() {
 			case "?", "esc", "q":
@@ -451,13 +463,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Show the shortcut reference from command mode, without intercepting
-		// a literal '?' while the command input or a text-entry dialog is active.
 		if msg.String() == "?" && !m.inInputMode && m.selectingStep == 0 && !m.hlInputMode {
 			m.showHelp = true
 			return m, nil
 		}
 
+		// (생략 없이 기존 모달창 및 스텝 처리 로직 유지)
 		if m.selectingStep == 10 {
 			switch msg.String() {
 			case "esc", "q":
@@ -475,7 +486,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					selectedFile := filepath.Join(m.logDirPath, m.memoFiles[m.memoCursor])
 					data, err := os.ReadFile(selectedFile)
 					if err != nil {
-						m.writeLog(fmt.Sprintf("[에러] 메모 파일 읽기 실패: %v", err))
+						m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 메모 파일 읽기 실패: %v", err)))
 					} else {
 						m.memoArea.SetValue(string(data))
 						m.writeLog(fmt.Sprintf("[메모] 파일 불러오기 성공: %s", selectedFile))
@@ -570,7 +581,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_ = m.port.Close()
 					m.port = nil
 				}
-				m.portGeneration++ // invalidate any outstanding read from the old port
+				m.portGeneration++
 				m.rxLineBuffer = ""
 				m.portName = m.tempPortName
 				m.baudRate = selectedBaud
@@ -585,7 +596,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p, err := serial.Open(m.portName, mode)
 				if err != nil {
 					m.port = nil
-					m.writeLog(fmt.Sprintf("[에러] 포트 열기 실패 (%s): %v", m.portName, err))
+					m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 포트 열기 실패 (%s): %v", m.portName, err)))
 				} else {
 					m.port = p
 					m.writeLog(fmt.Sprintf("[설정 변경] 포트: %s, 보드레이트: %d, 줄끝: %s 연결 성공", m.portName, m.baudRate, m.lineEnding))
@@ -647,14 +658,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.writeLog("[설정] 파일 로깅 기능: OFF [x]")
 					} else {
 						if err := os.MkdirAll(m.logDirPath, 0755); err != nil {
-							m.writeLog(fmt.Sprintf("[에러] 로그 폴더 생성 실패 (%s): %v", m.logDirPath, err))
+							m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 로그 폴더 생성 실패 (%s): %v", m.logDirPath, err)))
 							return m, nil
 						}
 
 						filename := filepath.Join(m.logDirPath, fmt.Sprintf("muart_log_%s.txt", time.Now().Format("20060102_150405")))
 						f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 						if err != nil {
-							m.writeLog(fmt.Sprintf("[에러] 로그 파일 생성 실패: %v", err))
+							m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 로그 파일 생성 실패: %v", err)))
 						} else {
 							m.logFile = f
 							m.isLogging = true
@@ -808,11 +819,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.writeLog(fmt.Sprintf("[설정] 로그 저장 폴더 변경 및 파일 재연결 완료: %s", filename))
 							} else {
 								m.isLogging = false
-								m.writeLog(fmt.Sprintf("[에러] 새 경로 파일 생성 실패: %v", err))
+								m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 새 경로 파일 생성 실패: %v", err)))
 							}
 						} else {
 							m.isLogging = false
-							m.writeLog(fmt.Sprintf("[에러] 폴더 생성 실패: %v", err))
+							m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 폴더 생성 실패: %v", err)))
 						}
 					} else {
 						m.writeLog(fmt.Sprintf("[설정] 로그 저장 폴더 경로가 변경되었습니다: %s", m.logDirPath))
@@ -876,12 +887,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := os.MkdirAll(m.logDirPath, 0755); err == nil {
 					err = os.WriteFile(fullExportPath, []byte(m.fullLogBuffer), 0644)
 					if err != nil {
-						m.writeLog(fmt.Sprintf("[에러] 로그 내보내기 실패: %v", err))
+						m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 로그 내보내기 실패: %v", err)))
 					} else {
 						m.writeLog(fmt.Sprintf("[설정] 로그가 성공적으로 내보내기 되었습니다: %s", fullExportPath))
 					}
 				} else {
-					m.writeLog(fmt.Sprintf("[에러] 내보내기 폴더 생성 실패: %v", err))
+					m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 내보내기 폴더 생성 실패: %v", err)))
 				}
 
 				m.selectingStep = 0
@@ -959,12 +970,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := os.MkdirAll(m.logDirPath, 0755); err == nil {
 					err = os.WriteFile(fullMemoPath, []byte(m.memoArea.Value()), 0644)
 					if err != nil {
-						m.writeLog(fmt.Sprintf("[에러] 메모 저장 실패: %v", err))
+						m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 메모 저장 실패: %v", err)))
 					} else {
 						m.writeLog(fmt.Sprintf("[메모] 메모가 성공적으로 저장되었습니다: %s", fullMemoPath))
 					}
 				} else {
-					m.writeLog(fmt.Sprintf("[에러] 메모 폴더 생성 실패: %v", err))
+					m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 메모 폴더 생성 실패: %v", err)))
 				}
 			}
 			return m, nil
@@ -1045,34 +1056,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				typedText := m.textInput.Value()
 				if typedText != "" {
-					suffix := ""
-					switch m.lineEnding {
-					case "LF":
-						suffix = "\n"
-					case "CR":
-						suffix = "\r"
-					case "CRLF":
-						suffix = "\r\n"
-					case "없음":
-						suffix = ""
-					}
-
-					fullSendText := typedText + suffix
-					m.txBytes += int64(len(fullSendText))
-					m.txPkts++
-
 					m.cmdHistory = append(m.cmdHistory, typedText)
 					m.historyIndex = -1
 
-					if m.port != nil {
-						_, err := m.port.Write([]byte(fullSendText))
+					var payload []byte
+					isHexTx := false
+
+					// Hex 바이트 직접 송신 기능 지원 ("hex: DE AD BE EF")
+					if strings.HasPrefix(strings.ToLower(typedText), "hex:") {
+						isHexTx = true
+						hexStr := strings.TrimSpace(typedText[4:])
+						hexStr = strings.ReplaceAll(hexStr, " ", "")
+						decoded, err := hex.DecodeString(hexStr)
 						if err != nil {
-							m.writeLog(fmt.Sprintf("[송신 FAIL] %v", err))
+							m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[송신 에러] 잘못된 Hex 형식입니다: %v", err)))
+							m.textInput.Reset()
+							return m, nil
+						}
+						payload = decoded
+					} else {
+						suffix := ""
+						switch m.lineEnding {
+						case "LF":
+							suffix = "\n"
+						case "CR":
+							suffix = "\r"
+						case "CRLF":
+							suffix = "\r\n"
+						case "없음":
+							suffix = ""
+						}
+						payload = []byte(typedText + suffix)
+					}
+
+					m.txBytes += int64(len(payload))
+					m.txPkts++
+
+					if m.port != nil {
+						_, err := m.port.Write(payload)
+						if err != nil {
+							m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(fmt.Sprintf("[송신 FAIL] 연결 문제 발생: %v", err)))
+							_ = m.port.Close()
+							m.port = nil
 						} else {
-							m.writeTxLog(typedText)
+							if isHexTx {
+								m.writeTxLog(fmt.Sprintf("[TX HEX] % X", payload))
+							} else {
+								m.writeTxLog(typedText)
+							}
 						}
 					} else {
-						m.writeLog("[에러] 연결된 시리얼 포트가 없습니다. 'Esc'를 눌러 모드 전환 후 'p'를 눌러 포트를 선택하세요.")
+						m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("[에러] 연결된 시리얼 포트가 없습니다. 'Esc'를 눌러 모드 전환 후 'p'를 눌러 포트를 선택하세요."))
 					}
 					m.textInput.Reset()
 				}
@@ -1124,7 +1158,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.port = nil
 				}
 				if m.portName == "" {
-					m.writeLog("[에러] 설정된 포트 이름이 없습니다. 'p'를 눌러 포트를 선택하세요.")
+					m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("[에러] 설정된 포트 이름이 없습니다. 'p'를 눌러 포트를 선택하세요."))
 					return m, nil
 				}
 				mode := &serial.Mode{
@@ -1138,7 +1172,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p, err := serial.Open(m.portName, mode)
 				if err != nil {
 					m.port = nil
-					m.writeLog(fmt.Sprintf("[에러] 재연결 실패 (%s): %v", m.portName, err))
+					m.writeLog(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("[에러] 재연결 실패 (%s): %v", m.portName, err)))
 					return m, nil
 				} else {
 					m.port = p
@@ -1182,16 +1216,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "up", "k":
 				m.viewport.LineUp(1)
+				m.autoScroll = false
 			case "down", "j":
 				m.viewport.LineDown(1)
+				if m.viewport.AtBottom() {
+					m.autoScroll = true
+				}
 			}
 		}
 
 	case serialMsg:
-		// Ignore stale reads returned by a port that has since been replaced.
 		if msg.generation != m.portGeneration {
 			return m, nil
 		}
+		// 포트 연결 끊김(물리적 탈착 등)에 대한 강력한 예외 처리
 		if msg.err != nil {
 			if m.port != nil {
 				_ = m.port.Close()
@@ -1199,12 +1237,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.portGeneration++
 			m.rxLineBuffer = ""
-			m.writeLog(fmt.Sprintf("[에러] 시리얼 읽기 실패; 연결을 해제했습니다: %v", msg.err))
+			errLog := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(fmt.Sprintf("[연결 끊김] 장치와 통신할 수 없습니다: %v", msg.err))
+			m.writeLog(errLog)
 			return m, nil
 		}
 		if len(msg.data) > 0 {
 			m.rxBytes += int64(len(msg.data))
-			m.rxPkts++ // read chunks, not protocol packets; UART itself is a byte stream.
+			m.rxPkts++
 			if m.isHexMode {
 				m.writeLog(fmt.Sprintf("[RX %dB] HEX: % X | ASCII: %s", len(msg.data), msg.data, printableASCII(msg.data)))
 			} else {
@@ -1299,11 +1338,11 @@ func (m model) View() string {
   c             화면 로그 지우기
   /             로그 검색 / 검색 필터 해제
   e             로그 내보내기
-  ↑ / k         로그 위로 이동
+  ↑ / k         로그 위로 이동 (마우스 스크롤 지원)
   ↓ / j         로그 아래로 이동
 
 [명령 입력 모드]
-  Enter         입력한 명령을 시리얼 포트로 전송
+  Enter         명령 전송 (hex: DE AD 입력 시 Raw Hex 전송)
   ↑ / ↓         이전 / 다음 명령 기록
 
 [메모장 분할 화면]
@@ -1322,6 +1361,7 @@ Ctrl+C         프로그램 종료
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, ts.Modal.Width(66).Render(modalContent))
 	}
 
+	// (생략 없이 기존 View 로직 유지)
 	if m.selectingStep == 10 {
 		modalContent := "저장된 메모 파일 불러오기 (Load Memo)\n\n"
 		if len(m.memoFiles) == 0 {
@@ -1602,7 +1642,7 @@ Ctrl+C         프로그램 종료
 	}
 
 	footerBox := ts.Footer.Width(boxWidth).Render(footerText)
-	help := ts.Help.Render("[v] 화면분할 [Tab] 포커스전환 [Ctrl+s] 파일저장 [Ctrl+o] 파일불러오기 [Esc] 모드전환 [p] 포트 [s] 설정 [c] 클리어 [?] 도움말 [Ctrl+C] 종료")
+	help := ts.Help.Render("[v] 화면분할 [Tab] 포커스전환 [Ctrl+s] 저장 [Ctrl+o] 불러오기 [Esc] 모드전환 [p] 포트 [s] 설정 [c] 클리어 [?] 도움말")
 
 	var mainView string
 	if m.showSplit {
@@ -1681,7 +1721,7 @@ func main() {
 	}
 
 	ti := textinput.New()
-	ti.Placeholder = "명령어를 입력하세요"
+	ti.Placeholder = "명령어를 입력하세요 (Hex 전송 예: hex: DE AD)"
 	ti.Focus()
 	ti.CharLimit = 256
 	ti.Width = 60
@@ -1734,7 +1774,8 @@ func main() {
 		highlightRules:  cfg.HighlightRules,
 	}
 
-	p := tea.NewProgram(initialModel, tea.WithAltScreen())
+	// tea.WithMouseCellMotion()을 추가하여 마우스 스크롤 이벤트 활성화
+	p := tea.NewProgram(initialModel, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("프로그램 실행 오류: %v", err)
 	}
